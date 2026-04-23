@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Project outputs (regeneratable)
+data/
+outputs/
+*.parquet
+viewer/posterior_cube.json
+
+# PROGRESS.md and Sentinel artefacts (per ~/.claude/rules/rules.md)
+PROGRESS.md
+sentinel-findings.md
+sentinel-findings.jsonl
+STUCK_FAILURES.md
+STUCK_FAILURES.jsonl
+
+# PyMC / PyTensor cache
+.pytensor/
+*.so
+*.pyd
+*.dll
+
+# IDE
+.vscode/
+.idea/
