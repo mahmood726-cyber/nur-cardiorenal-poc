@@ -30,7 +30,7 @@ def test_reconstruct_total_n_matches_first_at_risk():
         km_points=km, at_risk=intervals, arm="treatment",
         trial_id="NCT02540993", profile=_profile(), rng_seed=42,
     )
-    assert len(records) == 100 + 92 + 85
+    assert len(records) == 100
     assert all(r.arm == "treatment" for r in records)
     assert all(r.reconstructed for r in records)
 
