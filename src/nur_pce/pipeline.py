@@ -5,10 +5,10 @@ CLI subcommands:
     run-validation    — held-out FINEARTS-HF validation (v0.2 spec §3a item 4);
                         emits per-method RMSE + 95% CrI calibration vs truth
 
-Posterior flow (post-review fix `c13d3cf+`):
+Posterior flow (v0.1.2):
     fit_hte (PyMC) -> idata.posterior -> per-cell log_hr_draws via
-    log_hr = mu + X_cell . (beta + gamma).  Cube cells now reflect actual
-    posterior, not fabricated draws.
+    log_hr = mu + X_cell . beta.  Cube cells reflect actual posterior.
+    (gamma dropped in v0.1.2 — see model/hte_bayes.py docstring.)
 """
 from __future__ import annotations
 import argparse
@@ -62,16 +62,14 @@ def run_synth_pipeline(*, out_dir: Path, fixtures_dir: Path) -> Path:
         n_trials=len(trial_to_idx),
         X=np.array([r["X"] for r in rows]),
     )
-    fit = fit_hte(inputs, iter_warmup=1500, iter_sampling=1000, chains=4,
-                  seed=1, target_accept=0.95)
+    fit = fit_hte(inputs, iter_warmup=2000, iter_sampling=1000, chains=4,
+                  seed=1, target_accept=0.99)
     diag = fit.diagnostics()
     gate_diagnostics(diag)
 
     posterior = fit.idata.posterior
     mu_draws = _flatten_chains(posterior["mu"].values)            # (S,)
     beta_draws = _flatten_chains(posterior["beta"].values)        # (S, P)
-    gamma_draws = _flatten_chains(posterior["gamma"].values)      # (S, P)
-    coef_draws = beta_draws + gamma_draws                          # (S, P)
     var_sampling = float(np.mean(inputs.s ** 2))
 
     cells = []
@@ -88,8 +86,8 @@ def run_synth_pipeline(*, out_dir: Path, fixtures_dir: Path) -> Path:
                                 region=region,
                             )
                             x_cell = _x_for_cell(t2dm, sex)
-                            log_hr_draws = mu_draws + coef_draws @ x_cell
-                            var_hte = float(np.var(coef_draws @ x_cell))
+                            log_hr_draws = mu_draws + beta_draws @ x_cell
+                            var_hte = float(np.var(beta_draws @ x_cell))
                             cells.append(build_cell(
                                 key=key, log_hr_draws=log_hr_draws, tier=1,
                                 var_sampling=var_sampling, var_hte=var_hte,

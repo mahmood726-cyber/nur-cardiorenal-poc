@@ -80,8 +80,6 @@ def run_holdout_validation(
     posterior = fit.idata.posterior
     mu_draws = _flatten_chains(posterior["mu"].values)
     beta_draws = _flatten_chains(posterior["beta"].values)
-    gamma_draws = _flatten_chains(posterior["gamma"].values)
-    coef_draws = beta_draws + gamma_draws
 
     truth = np.array([r.log_hr for r in holdout])
     pce_mean = np.empty(len(holdout))
@@ -89,7 +87,7 @@ def run_holdout_validation(
     pce_hi = np.empty(len(holdout))
     for i, r in enumerate(holdout):
         x = _x_for_row(r)
-        log_hr_draws = mu_draws + coef_draws @ x
+        log_hr_draws = mu_draws + beta_draws @ x
         pce_mean[i] = float(log_hr_draws.mean())
         pce_lo[i] = float(np.quantile(log_hr_draws, 0.025))
         pce_hi[i] = float(np.quantile(log_hr_draws, 0.975))

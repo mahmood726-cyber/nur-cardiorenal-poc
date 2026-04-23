@@ -1,11 +1,26 @@
 """PyMC implementation of the hierarchical HTE model from spec §7.
 
-Single coherent posterior over (mu, beta, gamma, tau, alpha). Tier-1
-likelihood in v0.1; Tier-2 Poisson terms can be added without changing the
-public API.
+v0.1.2 cleanup (2026-04-23, post-final-review): the original spec §7 had
+both `beta` (prognostic main effect) and `gamma` (treatment-by-covariate
+interaction) parameters. With Tier-1 data — one log-HR per (trial, subgroup-cell)
+— each row IS the treatment-vs-control contrast for that cell. There is no
+treatment-arm indicator at the row level, so `beta` and `gamma` are
+unidentifiable; only their sum drives the likelihood. The v0.1 model fit
+both and the posterior split the composite coefficient between them in
+proportion to their priors.
 
-Engine choice: PyMC 5 (per plan amendment after preflight). Equivalent to the
-Stan formulation in spec §7. Diagnostics returned via ArviZ summary.
+Fix in v0.1.2: drop `gamma` from the model. The remaining `beta` is now
+explicitly the treatment-by-covariate interaction (the moderation of the
+log-HR by X). Posterior over the *effective* coefficient (sum of old
+beta+gamma) is identical; the parameterisation is just honest about what
+Tier-1 data identifies.
+
+When Tier-2 IPD is wired in (future v0.2 work), the model can re-introduce
+a separate `gamma` because per-individual rows DO carry treatment-arm
+indicators, restoring identifiability.
+
+Engine choice: PyMC 5 (per plan amendment after preflight). Diagnostics
+returned via ArviZ summary.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -59,11 +74,15 @@ def fit_hte(inputs: HTEFitInputs, *, iter_warmup: int = 1000,
             seed: int = 42, target_accept: float = 0.8) -> HTEFit:
     """Fit the hierarchical HTE model in PyMC.
 
-    Implements spec §7:
+    Tier-1-only formulation:
         y_i ~ Normal(theta_i, s_i^2)
-        theta_i = mu + alpha_trial + X_i . (beta + gamma)
+        theta_i = mu + alpha_trial + X_i . beta
         alpha ~ Normal(0, tau)         (non-centered)
-        mu ~ N(0,1); beta ~ N(0,0.5); gamma ~ N(0,0.25); tau ~ HalfNormal(0.5)
+        mu ~ N(0,1); beta ~ N(0,0.5); tau ~ HalfNormal(0.5)
+
+    `beta` is the treatment-by-covariate interaction (moderation of log-HR by X).
+    The composite coefficient inherited from the v0.1 spec §7 (`beta + gamma`)
+    is reported here as the single identifiable `beta`. See module docstring.
     """
     N = int(inputs.y.size)
     P = int(inputs.X.shape[1])
@@ -73,13 +92,11 @@ def fit_hte(inputs: HTEFitInputs, *, iter_warmup: int = 1000,
     with pm.Model():
         mu = pm.Normal("mu", 0.0, 1.0)
         beta = pm.Normal("beta", 0.0, 0.5, shape=P)
-        gamma = pm.Normal("gamma", 0.0, 0.25, shape=P)
         tau = pm.HalfNormal("tau", 0.5)
         alpha_raw = pm.Normal("alpha_raw", 0.0, 1.0, shape=J)
         alpha = pm.Deterministic("alpha", tau * alpha_raw)
 
-        coef = beta + gamma
-        theta = mu + alpha[trial_idx0] + pm.math.dot(inputs.X, coef)
+        theta = mu + alpha[trial_idx0] + pm.math.dot(inputs.X, beta)
         pm.Normal("y_obs", mu=theta, sigma=inputs.s, observed=inputs.y)
 
         idata = pm.sample(
