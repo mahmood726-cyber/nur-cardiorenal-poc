@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NUR-PCE — Personalised Counterfactual Engine</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; max-width: 980px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-weight: 600; margin-bottom: 0.25rem; }
+  .sub { color: #666; margin-top: 0; }
+  .row { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }
+  .card { border: 1px solid #ddd; border-radius: 6px; padding: 1rem; flex: 1 1 280px; }
+  label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.25rem; }
+  select, input[type="checkbox"] { width: 100%; padding: 0.3rem; }
+  .answer { font-size: 2rem; font-weight: 600; }
+  .ci { color: #555; font-size: 1rem; }
+  .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px; font-weight: 600; font-size: 0.8rem; }
+  .tier-1 { background: #fde2e1; color: #7a1a16; }
+  .tier-2 { background: #fff2c8; color: #6a4a00; }
+  .tier-3 { background: #d8f0d6; color: #1d5a17; }
+  .bar { height: 12px; border-radius: 4px; display: inline-block; }
+  .ped { background: #f7f8fb; padding: 0.75rem; border-left: 3px solid #6066d0; margin-top: 1rem; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<h1>NUR-PCE — Finerenone vs Placebo</h1>
+<p class="sub">Personalised counterfactual posterior for the composite cardiorenal outcome (POC v0.1).</p>
+
+<div class="row">
+  <div class="card">
+    <h3>Patient profile</h3>
+    <label>Age band</label><select id="age_band"></select>
+    <label>Sex</label><select id="sex"></select>
+    <label>eGFR band (mL/min/1.73m²)</label><select id="eGFR_band"></select>
+    <label>T2DM</label><select id="t2dm"><option value="true">Yes</option><option value="false">No</option></select>
+    <label>UACR band (mg/g)</label><select id="uacr_band"></select>
+    <label>NYHA class</label><select id="nyha"></select>
+    <label>Target population</label><select id="region"></select>
+  </div>
+  <div class="card">
+    <h3>Patient-conditional answer</h3>
+    <div class="answer" id="hr-mean">—</div>
+    <div class="ci" id="hr-ci">—</div>
+    <div style="margin-top: 0.6rem;">
+      <span class="badge" id="tier-badge">tier ?</span>
+      <span style="margin-left: 0.5rem;">P(HR&lt;1) = <strong id="p-lt-1">—</strong></span>
+    </div>
+    <div style="margin-top: 1rem;">
+      <strong>Uncertainty decomposition</strong><br>
+      <span class="bar" id="bar-sampling" style="background:#9ec5fe;"></span>
+      <span class="bar" id="bar-hte"      style="background:#fbb6a0;"></span>
+      <span class="bar" id="bar-transport"style="background:#b4e2b4;"></span>
+      <div style="font-size: 0.8rem; color: #555;">
+        sampling • HTE • transportability
+      </div>
+    </div>
+    <div class="ped" id="ped">Loading…</div>
+  </div>
+</div>
+
+<script>
+const NUR_VERSION = "v0.1";
+const STORAGE_KEY = "nur-pce-v0.1";
+
+async function loadCube() {
+  const r = await fetch("posterior_cube.json", {cache: "no-store"});
+  if (!r.ok) throw new Error("posterior_cube.json missing");
+  return r.json();
+}
+
+function key(c) {
+  return [c.age_band, c.sex, c.eGFR_band, String(c.t2dm), c.uacr_band, c.nyha, c.region].join("|");
+}
+
+function fillSelect(id, vals) {
+  const el = document.getElementById(id);
+  el.innerHTML = vals.map(v => `<option>${v}<${'<'}/option>`).join("");
+}
+
+function render(cube, currentKey, cell) {
+  if (!cell) {
+    document.getElementById("hr-mean").textContent = "no cell for profile";
+    return;
+  }
+  document.getElementById("hr-mean").textContent = cell.hr_mean.toFixed(2);
+  document.getElementById("hr-ci").textContent = `95% CrI ${cell.hr_credible_95[0].toFixed(2)} – ${cell.hr_credible_95[1].toFixed(2)}`;
+  const badge = document.getElementById("tier-badge");
+  badge.textContent = `Tier ${cell.tier}`;
+  badge.className = `badge tier-${cell.tier}`;
+  document.getElementById("p-lt-1").textContent = (cell.p_hr_lt_1 * 100).toFixed(1) + "%";
+  const u = cell.uncertainty_decomp;
+  const total = (u.sampling + u.hte + u.transport) || 1;
+  const scale = 200;
+  document.getElementById("bar-sampling").style.width = (u.sampling/total*scale).toFixed(0) + "px";
+  document.getElementById("bar-hte").style.width      = (u.hte/total*scale).toFixed(0) + "px";
+  document.getElementById("bar-transport").style.width= (u.transport/total*scale).toFixed(0) + "px";
+  document.getElementById("ped").innerHTML =
+    `<strong>What this means.<${'<'}/strong> The hazard ratio shown is the posterior mean for the patient profile selected, after transporting trial evidence to the chosen target population. Tier ${cell.tier} indicates the strongest source of evidence behind this cell. Tier 1 = published subgroup HRs only; Tier 2 = also reconstructed individual data via Guyot from KM curves; Tier 3 = real IPD (deferred for v0.1).`;
+}
+
+(async function init() {
+  const cube = await loadCube();
+  const cells = new Map(cube.cells.map(c => [key(c.key), c]));
+  fillSelect("age_band",  ["<60","60-70","70-75","75+"]);
+  fillSelect("sex",       ["M","F"]);
+  fillSelect("eGFR_band", ["<30","30-45","45-60",">=60"]);
+  fillSelect("uacr_band", ["<300","300-1000",">=1000"]);
+  fillSelect("nyha",      ["I-II","III-IV"]);
+  fillSelect("region",    ["Pakistan","India","Sub-Saharan Africa","USA","EU"]);
+
+  const inputs = ["age_band","sex","eGFR_band","t2dm","uacr_band","nyha","region"];
+  function readKey() {
+    const vals = inputs.map(id => document.getElementById(id).value);
+    return vals.join("|");
+  }
+  function update() {
+    const k = readKey();
+    try { localStorage.setItem(STORAGE_KEY, k); } catch (_) {}
+    const cell = cells.get(k);
+    render(cube, k, cell);
+  }
+  inputs.forEach(id => document.getElementById(id).addEventListener("change", update));
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      saved.split("|").forEach((v, i) => {
+        const el = document.getElementById(inputs[i]);
+        if (el) el.value = v;
+      });
+    }
+  } catch (_) {}
+  update();
+})().catch(err => { document.getElementById("ped").textContent = "Error: " + err.message; });
+</script>
+</body>
+</html>
