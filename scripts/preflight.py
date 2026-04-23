@@ -3,17 +3,47 @@
 
 Fails closed with a specific action list if any prereq is missing.
 Run before starting any other task.
+
+Data paths are resolved from environment variables or candidate roots so
+this script is not tied to any single developer machine (lessons.md#code-quality).
+
+    AACT_PATH   — env var NUR_AACT_PATH, or auto-discover under C: / D:
+    IHME_PATH   — env var NUR_IHME_PATH, or auto-discover under C: / D:
+    WHO_PATH    — env var NUR_WHO_PATH,  or auto-discover under C: / D:
+    WB_PATH     — env var NUR_WB_PATH,   or auto-discover under C: / D:
 """
 from __future__ import annotations
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
 REQUIRED_PYTHON = (3, 11)
-AACT_PATH = Path("D:/AACT-storage/AACT/2026-04-12")
-IHME_PATH = Path("D:/Projects/ihme-data-lakehouse")
-WHO_PATH = Path("D:/Projects/who-data-lakehouse")
-WB_PATH = Path("D:/Projects/wb-data-lakehouse")
+
+# ---------------------------------------------------------------------------
+# Candidate-root discovery (lessons.md#CT.gov — "do not hardcode one drive").
+# Set the env var to skip discovery entirely.
+# ---------------------------------------------------------------------------
+_CANDIDATE_ROOTS = [Path("C:/"), Path("D:/")]
+
+
+def _resolve_path(env_var: str, *relative_candidates: str) -> Path:
+    """Return path from env var if set, else first existing candidate, else first candidate."""
+    if env_var in os.environ:
+        return Path(os.environ[env_var])
+    for root in _CANDIDATE_ROOTS:
+        for rel in relative_candidates:
+            p = root / rel
+            if p.exists():
+                return p
+    # Fail closed: return the first candidate so check_path reports it missing.
+    return _CANDIDATE_ROOTS[0] / relative_candidates[0]
+
+
+AACT_PATH = _resolve_path("NUR_AACT_PATH", "AACT-storage/AACT/2026-04-12")
+IHME_PATH = _resolve_path("NUR_IHME_PATH", "Projects/ihme-data-lakehouse")
+WHO_PATH = _resolve_path("NUR_WHO_PATH", "Projects/who-data-lakehouse")
+WB_PATH = _resolve_path("NUR_WB_PATH", "Projects/wb-data-lakehouse")
 
 
 def check_python() -> tuple[bool, str]:
