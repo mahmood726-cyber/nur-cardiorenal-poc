@@ -1,0 +1,32 @@
+{
+  "outcome": "composite_cardiorenal",
+  "rows": [
+    {
+      "trial_id": "NCT02540993",
+      "subgroup_key": {
+        "age_band": "60-70", "sex": "M", "eGFR_band": "30-45",
+        "t2dm": true, "uacr_band": "300-1000", "nyha": "I-II", "region": "USA"
+      },
+      "log_hr": -0.301,
+      "se": 0.080,
+      "outcome": "composite_cardiorenal",
+      "extractor": "synth",
+      "verifier": "synth",
+      "source_doc": "synthetic_fixture",
+      "source_page": null
+    },
+    {
+      "trial_id": "NCT02540993",
+      "subgroup_key": {
+        "age_band": "70-75", "sex": "F", "eGFR_band": "<30",
+        "t2dm": true, "uacr_band": ">=1000", "nyha": "III-IV", "region": "EU"
+      },
+      "log_hr": -0.223,
+      "se": 0.140,
+      "outcome": "composite_cardiorenal",
+      "extractor": "synth",
+      "verifier": "synth",
+      "source_doc": "synthetic_fixture"
+    }
+  ]
+}
