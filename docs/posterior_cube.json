@@ -1,0 +1,115 @@
+{
+  "schema_version": "0.1",
+  "generated_at": "2026-04-23T13:36:43.954791+00:00",
+  "drug": "finerenone",
+  "comparator": "placebo",
+  "outcome": "composite_cardiorenal",
+  "covariates": [
+    "age_band",
+    "sex",
+    "eGFR_band",
+    "t2dm",
+    "uacr_band",
+    "nyha",
+    "region"
+  ],
+  "cells": [
+    {
+      "key": {
+        "age_band": "<60",
+        "sex": "M",
+        "eGFR_band": "<30",
+        "t2dm": true,
+        "uacr_band": "<300",
+        "nyha": "I-II",
+        "region": "USA"
+      },
+      "hr_mean": 0.8472529943114671,
+      "hr_credible_95": [
+        0.32436686802096015,
+        1.9357016100719284
+      ],
+      "p_hr_lt_1": 0.80325,
+      "tier": 1,
+      "uncertainty_decomp": {
+        "sampling": 0.013000000000000001,
+        "hte": 0.2597071868066006,
+        "transport": 0.0
+      }
+    },
+    {
+      "key": {
+        "age_band": "<60",
+        "sex": "M",
+        "eGFR_band": "<30",
+        "t2dm": false,
+        "uacr_band": "<300",
+        "nyha": "I-II",
+        "region": "USA"
+      },
+      "hr_mean": 0.9467743374224733,
+      "hr_credible_95": [
+        0.26165374318768897,
+        2.461601971268265
+      ],
+      "p_hr_lt_1": 0.65925,
+      "tier": 1,
+      "uncertainty_decomp": {
+        "sampling": 0.013000000000000001,
+        "hte": 0.023876152398506177,
+        "transport": 0.0
+      }
+    },
+    {
+      "key": {
+        "age_band": "<60",
+        "sex": "F",
+        "eGFR_band": "<30",
+        "t2dm": true,
+        "uacr_band": "<300",
+        "nyha": "I-II",
+        "region": "USA"
+      },
+      "hr_mean": 0.9150086780475185,
+      "hr_credible_95": [
+        0.35647255756690027,
+        2.1134384655909817
+      ],
+      "p_hr_lt_1": 0.73825,
+      "tier": 1,
+      "uncertainty_decomp": {
+        "sampling": 0.013000000000000001,
+        "hte": 0.24228518940823837,
+        "transport": 0.0
+      }
+    },
+    {
+      "key": {
+        "age_band": "<60",
+        "sex": "F",
+        "eGFR_band": "<30",
+        "t2dm": false,
+        "uacr_band": "<300",
+        "nyha": "I-II",
+        "region": "USA"
+      },
+      "hr_mean": 1.0197029569570162,
+      "hr_credible_95": [
+        0.2835012588171984,
+        2.724650015434356
+      ],
+      "p_hr_lt_1": 0.6075,
+      "tier": 1,
+      "uncertainty_decomp": {
+        "sampling": 0.013000000000000001,
+        "hte": 0.0,
+        "transport": 0.0
+      }
+    }
+  ],
+  "diagnostics": {
+    "rhat_max": 1.0017301946760349,
+    "ess_min": 1862.5017564940194,
+    "divergent": 0.0
+  }
+}
