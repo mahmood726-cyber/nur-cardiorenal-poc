@@ -1,0 +1,1 @@
+"""Bayesian HTE model + diagnostics."""
