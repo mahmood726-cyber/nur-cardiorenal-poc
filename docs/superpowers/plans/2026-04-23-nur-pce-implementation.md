@@ -6,7 +6,7 @@
 
 **Architecture:** Seven-stage Python pipeline (ingest × 3 → Bayesian HTE model → g-formula transportability projection → posterior cube → single-file HTML viewer), each stage JSON in / JSON out. Hierarchical Bayesian model fit in Stan via `cmdstanpy` with PyMC fallback. Validation by held-out FINEARTS-HF subgroup HR prediction.
 
-**Tech Stack:** Python 3.13, pytest (TDD), `cmdstanpy` (primary) / PyMC (fallback), Stan, pandas + pyarrow, pydantic v2, numpy, scipy, matplotlib (validation reports only — viewer is dependency-free HTML/JS).
+**Tech Stack:** Python 3.13, pytest (TDD), **PyMC 5 (primary engine)**, pandas + pyarrow, pydantic v2, numpy, scipy, matplotlib (validation reports only — viewer is dependency-free HTML/JS). Stan/cmdstanpy noted as future optimisation; spec §11 sanctioned PyMC as the Windows fallback.
 
 **Spec:** `docs/superpowers/specs/2026-04-23-nur-pce-design.md` (v0.1, locked, commit `a6de22e`).
 
@@ -36,8 +36,7 @@ C:/Projects/nur-cardiorenal-poc/
 │   │   └── ipd_reconstruct.py          # Guyot from KM
 │   ├── model/
 │   │   ├── __init__.py
-│   │   ├── stan/hte.stan               # Stan model
-│   │   ├── hte_bayes.py                # cmdstanpy wrapper
+│   │   ├── hte_bayes.py                # PyMC model + fit wrapper
 │   │   └── diagnostics.py              # R̂, ESS, divergent gates
 │   ├── transport/
 │   │   ├── __init__.py
@@ -139,16 +138,12 @@ def check_path(p: Path, label: str) -> tuple[bool, str]:
     return True, f"{label} OK at {p}"
 
 
-def check_stan() -> tuple[bool, str]:
+def check_pymc() -> tuple[bool, str]:
     try:
-        import cmdstanpy  # type: ignore
-        try:
-            cmdstanpy.cmdstan_path()
-            return True, "cmdstan installed"
-        except Exception as e:
-            return False, f"cmdstanpy installed but cmdstan toolchain missing: {e} (run: python -c 'import cmdstanpy; cmdstanpy.install_cmdstan()')"
+        import pymc  # type: ignore
+        return True, f"pymc {pymc.__version__} OK (Windows-friendly Bayesian engine; spec §11 fallback)"
     except ImportError:
-        return False, "cmdstanpy NOT installed (pip install cmdstanpy)"
+        return False, "pymc NOT installed (pip install pymc)"
 
 
 def main() -> int:
@@ -160,7 +155,7 @@ def main() -> int:
         ("scipy", check_module("scipy")),
         ("pandas", check_module("pandas")),
         ("pyarrow", check_module("pyarrow")),
-        ("cmdstanpy", check_stan()),
+        ("pymc", check_pymc()),
         ("aact", check_path(AACT_PATH, "AACT snapshot")),
         ("ihme", check_path(IHME_PATH, "IHME lakehouse")),
         ("who", check_path(WHO_PATH, "WHO lakehouse")),
@@ -220,7 +215,8 @@ dependencies = [
     "scipy>=1.12",
     "pandas>=2.2",
     "pyarrow>=15",
-    "cmdstanpy>=1.2",
+    "pymc>=5.10",
+    "arviz>=0.17",
 ]
 
 [project.optional-dependencies]
@@ -241,8 +237,12 @@ where = ["src"]
 testpaths = tests
 python_files = test_*.py
 addopts = -ra --strict-markers
+markers =
+    slow: marks tests as slow (deselect with '-m "not slow"')
 filterwarnings =
-    ignore::DeprecationWarning:cmdstanpy.*
+    ignore::DeprecationWarning:pymc.*
+    ignore::FutureWarning:arviz.*
+    ignore::DeprecationWarning:pytensor.*
 ```
 
 Per `lessons.md`: "Module-name collision hides tests". `testpaths` + `tests/__init__.py` together prevent this.
@@ -288,11 +288,12 @@ sentinel-findings.jsonl
 STUCK_FAILURES.md
 STUCK_FAILURES.jsonl
 
-# Stan compiled artefacts
-*.exe
-*_model
-src/nur_pce/model/stan/hte
-src/nur_pce/model/stan/hte.exe
+# PyMC / PyTensor cache
+.pytensor/
+__pycache__/
+*.so
+*.pyd
+*.dll
 
 # IDE
 .vscode/
@@ -1198,72 +1199,15 @@ git commit -m "task6: population marginals loader with normalisation tolerance"
 
 ---
 
-## Task 7: Stan model file + cmdstanpy wrapper
+## Task 7: PyMC HTE model + fit wrapper
 
 **Files:**
-- Create: `src/nur_pce/model/__init__.py`, `src/nur_pce/model/stan/hte.stan`, `src/nur_pce/model/hte_bayes.py`
+- Create: `src/nur_pce/model/__init__.py`, `src/nur_pce/model/hte_bayes.py`
 - Test: `tests/test_model_hte_bayes.py`
 
-- [ ] **Step 1: Write the Stan model**
+**Engine note:** Plan pivoted from Stan to PyMC primary at preflight (Stan toolchain absent on target machine; PyMC 5.28 installed and validated). Spec §11 explicitly sanctioned this fallback. Future optimisation: port the same model to Stan for ~5x speedup once cmdstan installed.
 
-```stan
-// src/nur_pce/model/stan/hte.stan
-//
-// Hierarchical Bayesian HTE model for NUR-PCE.
-//
-// Tier-1 contribution: y_i ~ Normal(theta_i, s_i^2) with theta a function of
-// trial RE + main covariate effects + treatment-by-covariate interactions.
-//
-// Tier-2 contribution: per-individual Cox-via-Poisson — deferred to Task 7b
-// for v0.1; the Stan file accepts the Tier-1 likelihood today and is
-// extended in a later task.
-
-data {
-  int<lower=1> N;                       // number of subgroup rows
-  vector[N] y;                          // log-HR per subgroup
-  vector<lower=0>[N] s;                 // SE per subgroup
-  int<lower=1> J;                       // number of trials
-  array[N] int<lower=1, upper=J> trial; // trial index per row
-  int<lower=1> P;                       // number of covariates
-  matrix[N, P] X;                       // covariate values (centered)
-}
-
-parameters {
-  real mu;                              // main treatment effect
-  vector[P] beta;                       // prognostic main effects
-  vector[P] gamma;                      // treatment x covariate interactions
-  vector[J] alpha_raw;                  // non-centered trial RE
-  real<lower=0> tau;                    // between-trial heterogeneity
-}
-
-transformed parameters {
-  vector[J] alpha = tau * alpha_raw;
-  vector[N] theta;
-  for (n in 1:N) {
-    theta[n] = mu + alpha[trial[n]] + dot_product(X[n], beta + gamma);
-  }
-}
-
-model {
-  // Priors per spec §7
-  mu       ~ normal(0, 1);
-  beta     ~ normal(0, 0.5);
-  gamma    ~ normal(0, 0.25);
-  tau      ~ normal(0, 0.5);
-  alpha_raw ~ normal(0, 1);
-
-  // Likelihood (Tier 1)
-  y ~ normal(theta, s);
-}
-
-generated quantities {
-  // Posterior predictive log-HR for each row, useful for diagnostics
-  vector[N] y_rep;
-  for (n in 1:N) y_rep[n] = normal_rng(theta[n], s[n]);
-}
-```
-
-- [ ] **Step 2: Write the failing tests**
+- [ ] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_model_hte_bayes.py
@@ -1313,12 +1257,12 @@ def test_fit_emits_diagnostics():
     assert "divergent" in diag
 ```
 
-- [ ] **Step 3: Run tests to verify failure**
+- [ ] **Step 2: Run tests to verify failure**
 
 Run: `pytest tests/test_model_hte_bayes.py -v -m slow`
 Expected: FAIL — module missing.
 
-- [ ] **Step 4: Implement the cmdstanpy wrapper**
+- [ ] **Step 3: Implement the PyMC model + wrapper**
 
 ```python
 # src/nur_pce/model/__init__.py
@@ -1327,19 +1271,20 @@ Expected: FAIL — module missing.
 
 ```python
 # src/nur_pce/model/hte_bayes.py
-"""cmdstanpy wrapper around the HTE Stan model.
+"""PyMC implementation of the hierarchical HTE model from spec §7.
 
-Single coherent posterior over (mu, beta, gamma, tau, alpha). Tier-1 likelihood
-in v0.1; Tier-2 Poisson terms added in a follow-up task without changing the
+Single coherent posterior over (mu, beta, gamma, tau, alpha). Tier-1
+likelihood in v0.1; Tier-2 Poisson terms can be added without changing the
 public API.
+
+Engine choice: PyMC 5 (per plan amendment after preflight). Equivalent to the
+Stan formulation in spec §7. Diagnostics returned via ArviZ summary.
 """
 from __future__ import annotations
 from dataclasses import dataclass
-from pathlib import Path
 import numpy as np
-from cmdstanpy import CmdStanModel
-
-STAN_FILE = Path(__file__).parent / "stan" / "hte.stan"
+import pymc as pm
+import arviz as az
 
 
 @dataclass(frozen=True)
@@ -1352,65 +1297,83 @@ class HTEFitInputs:
 
 
 class HTEFit:
-    def __init__(self, fit, inputs: HTEFitInputs):
-        self._fit = fit
+    def __init__(self, idata: az.InferenceData, inputs: HTEFitInputs):
+        self.idata = idata
         self.inputs = inputs
+        self._summary = az.summary(idata, round_to="none")
 
     def posterior_summary(self, name: str) -> dict[str, float]:
-        df = self._fit.summary()
-        if name not in df.index:
+        if name not in self._summary.index:
             raise KeyError(f"{name} not in posterior summary")
-        row = df.loc[name]
+        row = self._summary.loc[name]
         return {
-            "mean": float(row["Mean"]),
-            "sd": float(row["StdDev"]),
-            "q05": float(row["5%"]),
-            "q95": float(row["95%"]),
-            "rhat": float(row["R_hat"]),
-            "ess_bulk": float(row["ESS_bulk"]),
+            "mean": float(row["mean"]),
+            "sd": float(row["sd"]),
+            "q05": float(row["hdi_3%"]),
+            "q95": float(row["hdi_97%"]),
+            "rhat": float(row["r_hat"]),
+            "ess_bulk": float(row["ess_bulk"]),
         }
 
     def diagnostics(self) -> dict[str, float]:
-        df = self._fit.summary()
-        rhat_max = float(df["R_hat"].max())
-        ess_min = float(df["ESS_bulk"].min())
-        divergent = int(self._fit.diagnose().count("divergent"))
+        rhat_max = float(self._summary["r_hat"].max())
+        ess_min = float(self._summary["ess_bulk"].min())
+        # PyMC stores divergent in sample_stats.diverging
+        divergent = 0
+        if hasattr(self.idata, "sample_stats") and "diverging" in self.idata.sample_stats:
+            divergent = int(self.idata.sample_stats["diverging"].sum())
         return {"rhat_max": rhat_max, "ess_min": ess_min, "divergent": divergent}
 
     def draws_dataframe(self):
-        return self._fit.draws_pd()
+        return self.idata.posterior.to_dataframe().reset_index()
 
 
 def fit_hte(inputs: HTEFitInputs, *, iter_warmup: int = 1000,
             iter_sampling: int = 1000, chains: int = 4,
             seed: int = 42) -> HTEFit:
-    model = CmdStanModel(stan_file=STAN_FILE)
-    data = {
-        "N": int(inputs.y.size),
-        "y": inputs.y.tolist(),
-        "s": inputs.s.tolist(),
-        "J": int(inputs.n_trials),
-        "trial": inputs.trial.tolist(),
-        "P": int(inputs.X.shape[1]),
-        "X": inputs.X.tolist(),
-    }
-    fit = model.sample(
-        data=data, iter_warmup=iter_warmup, iter_sampling=iter_sampling,
-        chains=chains, seed=seed, show_progress=False, refresh=0,
-    )
-    return HTEFit(fit, inputs)
+    """Fit the hierarchical HTE model in PyMC.
+
+    Implements spec §7:
+        y_i ~ Normal(theta_i, s_i^2)
+        theta_i = mu + alpha_trial + X_i . (beta + gamma)
+        alpha ~ Normal(0, tau)         (non-centered)
+        mu ~ N(0,1); beta ~ N(0,0.5); gamma ~ N(0,0.25); tau ~ HalfNormal(0.5)
+    """
+    N = int(inputs.y.size)
+    P = int(inputs.X.shape[1])
+    J = int(inputs.n_trials)
+    trial_idx0 = inputs.trial.astype(int) - 1  # PyMC indexing 0..J-1
+
+    with pm.Model():
+        mu = pm.Normal("mu", 0.0, 1.0)
+        beta = pm.Normal("beta", 0.0, 0.5, shape=P)
+        gamma = pm.Normal("gamma", 0.0, 0.25, shape=P)
+        tau = pm.HalfNormal("tau", 0.5)
+        alpha_raw = pm.Normal("alpha_raw", 0.0, 1.0, shape=J)
+        alpha = pm.Deterministic("alpha", tau * alpha_raw)
+
+        coef = beta + gamma
+        theta = mu + alpha[trial_idx0] + pm.math.dot(inputs.X, coef)
+        pm.Normal("y_obs", mu=theta, sigma=inputs.s, observed=inputs.y)
+
+        idata = pm.sample(
+            draws=iter_sampling, tune=iter_warmup, chains=chains,
+            random_seed=seed, progressbar=False, compute_convergence_checks=False,
+            return_inferencedata=True,
+        )
+    return HTEFit(idata, inputs)
 ```
 
-- [ ] **Step 5: Run tests to verify pass**
+- [ ] **Step 4: Run tests to verify pass**
 
 Run: `pytest tests/test_model_hte_bayes.py -v -m slow`
-Expected: 2 passed (this is the slowest test in the suite — first run also compiles the Stan model).
+Expected: 2 passed (slowest test in the suite; PyTensor compile + sampling, ~30-90s on this machine without g++).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/nur_pce/model/ tests/test_model_hte_bayes.py
-git commit -m "task7: stan HTE model + cmdstanpy fit wrapper"
+git commit -m "task7: PyMC HTE model + fit wrapper"
 ```
 
 ---
