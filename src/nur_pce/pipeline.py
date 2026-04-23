@@ -2,6 +2,8 @@
 
 CLI subcommands:
     run-synth         — pipeline on synthetic fixtures (used by tests + CI)
+    run-validation    — held-out FINEARTS-HF validation (v0.2 spec §3a item 4);
+                        emits per-method RMSE + 95% CrI calibration vs truth
 
 Posterior flow (post-review fix `c13d3cf+`):
     fit_hte (PyMC) -> idata.posterior -> per-cell log_hr_draws via
@@ -104,13 +106,31 @@ def run_synth_pipeline(*, out_dir: Path, fixtures_dir: Path) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(prog="nur_pce")
     sub = parser.add_subparsers(dest="cmd", required=True)
+
     run_synth = sub.add_parser("run-synth")
     run_synth.add_argument("--out", type=Path, default=Path("outputs"))
     run_synth.add_argument("--fixtures", type=Path, default=Path("fixtures"))
+
+    run_val = sub.add_parser("run-validation")
+    run_val.add_argument("--train", type=Path,
+                         default=Path("fixtures/tier1_train_synth.json"))
+    run_val.add_argument("--holdout", type=Path,
+                         default=Path("fixtures/tier1_holdout_finearts_synth.json"))
+    run_val.add_argument("--out", type=Path,
+                         default=Path("outputs/validation"))
+
     args = parser.parse_args()
     if args.cmd == "run-synth":
         out = run_synth_pipeline(out_dir=args.out, fixtures_dir=args.fixtures)
         print(f"Cube written to {out / 'posterior_cube.json'}")
+    elif args.cmd == "run-validation":
+        from nur_pce.validate.holdout_runner import run_holdout_validation
+        out = run_holdout_validation(
+            train_tier1_path=args.train,
+            holdout_tier1_path=args.holdout,
+            out_dir=args.out,
+        )
+        print(f"Validation report written to {out / 'validation_report.json'}")
     return 0
 
 

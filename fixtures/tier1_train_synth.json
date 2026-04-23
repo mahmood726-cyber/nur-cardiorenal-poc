@@ -1,0 +1,47 @@
+{
+  "outcome": "composite_cardiorenal",
+  "rows": [
+    {
+      "trial_id": "NCT02540993",
+      "subgroup_key": {"age_band": "60-70", "sex": "M", "eGFR_band": "30-45", "t2dm": true, "uacr_band": "300-1000", "nyha": "I-II", "region": "USA"},
+      "log_hr": -0.301, "se": 0.080,
+      "outcome": "composite_cardiorenal",
+      "extractor": "synth-train", "verifier": "synth-train", "source_doc": "FIDELIO-DKD-mock"
+    },
+    {
+      "trial_id": "NCT02540993",
+      "subgroup_key": {"age_band": "70-75", "sex": "F", "eGFR_band": "<30", "t2dm": true, "uacr_band": ">=1000", "nyha": "III-IV", "region": "EU"},
+      "log_hr": -0.223, "se": 0.140,
+      "outcome": "composite_cardiorenal",
+      "extractor": "synth-train", "verifier": "synth-train", "source_doc": "FIDELIO-DKD-mock"
+    },
+    {
+      "trial_id": "NCT02540993",
+      "subgroup_key": {"age_band": "<60", "sex": "M", "eGFR_band": "45-60", "t2dm": true, "uacr_band": "<300", "nyha": "I-II", "region": "USA"},
+      "log_hr": -0.357, "se": 0.110,
+      "outcome": "composite_cardiorenal",
+      "extractor": "synth-train", "verifier": "synth-train", "source_doc": "FIDELIO-DKD-mock"
+    },
+    {
+      "trial_id": "NCT02545049",
+      "subgroup_key": {"age_band": "60-70", "sex": "F", "eGFR_band": "45-60", "t2dm": true, "uacr_band": "300-1000", "nyha": "I-II", "region": "EU"},
+      "log_hr": -0.288, "se": 0.090,
+      "outcome": "composite_cardiorenal",
+      "extractor": "synth-train", "verifier": "synth-train", "source_doc": "FIGARO-DKD-mock"
+    },
+    {
+      "trial_id": "NCT02545049",
+      "subgroup_key": {"age_band": "70-75", "sex": "M", "eGFR_band": "30-45", "t2dm": true, "uacr_band": ">=1000", "nyha": "III-IV", "region": "USA"},
+      "log_hr": -0.234, "se": 0.130,
+      "outcome": "composite_cardiorenal",
+      "extractor": "synth-train", "verifier": "synth-train", "source_doc": "FIGARO-DKD-mock"
+    },
+    {
+      "trial_id": "NCT02545049",
+      "subgroup_key": {"age_band": "<60", "sex": "F", "eGFR_band": ">=60", "t2dm": false, "uacr_band": "<300", "nyha": "I-II", "region": "EU"},
+      "log_hr": -0.319, "se": 0.105,
+      "outcome": "composite_cardiorenal",
+      "extractor": "synth-train", "verifier": "synth-train", "source_doc": "FIGARO-DKD-mock"
+    }
+  ]
+}
