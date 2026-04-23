@@ -36,6 +36,17 @@ The same paradigm scales to any drug class with published subgroup forest plots 
 - MRA class siblings (spironolactone, eplerenone) — natural extension after v0.1 ships.
 - Multi-language wrapping (handled by the Synthesis-Courses / Fatiha pipeline once v0.1 is stable).
 
+### 3a. Honest gap list — deferred from v0.1 to v0.2 after final-review (2026-04-23)
+
+Final code review (commit `c13d3cf`) surfaced four design items that v0.1 *scaffolds* but does not *complete*. They are explicitly out of v0.1 scope and tracked here so the README and validation claims stay honest:
+
+1. **Tier-2 Poisson likelihood not wired into the fit.** v0.1 reconstructs Tier-2 IPD records via Guyot (`ingest/ipd_reconstruct.py`) but the model in `model/hte_bayes.py` only consumes Tier-1 subgroup HRs. The fit is therefore Tier-1-only despite the §10 scope listing Tiers 1+2. v0.2: add a Cox-via-Poisson likelihood block to the PyMC model, sharing the same `theta` linear predictor.
+2. **`beta + gamma` identifiability.** The v0.1 model adds main-effect `beta` and interaction `gamma` with the same X (no separate treatment indicator column), so only their sum is identifiable. The posterior is correct for the composite coefficient but each individually is split between the two parameters in proportion to their priors. v0.2: add a treatment-arm indicator column to X so `beta` (control-arm prognostic) and `gamma` (treatment-by-covariate interaction) are separately identified.
+3. **G-formula on natural scale.** `transport/g_formula.py` averages on the log-HR scale (`E[log HR]` weighted by `P_T(X)`), and the caller exponentiates. Spec §7 stipulated `E_{P_T(X)}[exp(theta(X))]` (natural scale). Jensen's inequality gives a small downward bias for finite-variance posteriors. v0.2: exponentiate per-cell-per-draw before weighting.
+4. **Held-out FINEARTS-HF validation runner.** Primitives are in place (`validate/baselines.py`, `validate/holdout.py::score_predictions`) but no orchestrator loads FINEARTS subgroup HRs and emits the §9 metrics table. v0.2: add `validate/holdout_runner.py` and `pipeline.py::run_validation` subcommand.
+
+**v0.1 ship status:** the engine, schema, ingest, diagnostics gate, leakage gate, single-file viewer, and end-to-end synth pipeline (with posterior wired through) are complete. The four items above are explicitly v0.2 scope.
+
 ## 4. Architecture
 
 ```

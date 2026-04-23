@@ -27,8 +27,13 @@ REQUIRED_PYTHON = (3, 11)
 _CANDIDATE_ROOTS = [Path("C:/"), Path("D:/")]
 
 
-def _resolve_path(env_var: str, *relative_candidates: str) -> Path:
-    """Return path from env var if set, else first existing candidate, else first candidate."""
+def _resolve_path(env_var: str, *relative_candidates: str) -> Path | None:
+    """Return path from env var if set, else first existing candidate, else None.
+
+    Returns None when no candidate exists — `check_path` then reports the prereq
+    as missing with an explicit env-var hint, instead of silently fabricating a
+    plausible-looking path. Per code-review §critical-2 (lessons.md#code-quality).
+    """
     if env_var in os.environ:
         return Path(os.environ[env_var])
     for root in _CANDIDATE_ROOTS:
@@ -36,8 +41,7 @@ def _resolve_path(env_var: str, *relative_candidates: str) -> Path:
             p = root / rel
             if p.exists():
                 return p
-    # Fail closed: return the first candidate so check_path reports it missing.
-    return _CANDIDATE_ROOTS[0] / relative_candidates[0]
+    return None
 
 
 AACT_PATH = _resolve_path("NUR_AACT_PATH", "AACT-storage/AACT/2026-04-12")
@@ -60,7 +64,9 @@ def check_module(name: str) -> tuple[bool, str]:
     return True, f"Module '{name}' OK"
 
 
-def check_path(p: Path, label: str) -> tuple[bool, str]:
+def check_path(p: Path | None, label: str, env_var: str) -> tuple[bool, str]:
+    if p is None:
+        return False, f"{label} not found in any candidate root; set {env_var}"
     if not p.exists():
         return False, f"{label} path missing: {p}"
     return True, f"{label} OK at {p}"
@@ -84,10 +90,10 @@ def main() -> int:
         ("pandas", check_module("pandas")),
         ("pyarrow", check_module("pyarrow")),
         ("pymc", check_pymc()),
-        ("aact", check_path(AACT_PATH, "AACT snapshot")),
-        ("ihme", check_path(IHME_PATH, "IHME lakehouse")),
-        ("who", check_path(WHO_PATH, "WHO lakehouse")),
-        ("wb", check_path(WB_PATH, "WB lakehouse")),
+        ("aact", check_path(AACT_PATH, "AACT snapshot", "NUR_AACT_PATH")),
+        ("ihme", check_path(IHME_PATH, "IHME lakehouse", "NUR_IHME_PATH")),
+        ("who", check_path(WHO_PATH, "WHO lakehouse", "NUR_WHO_PATH")),
+        ("wb", check_path(WB_PATH, "WB lakehouse", "NUR_WB_PATH")),
     ]
     failed = [(n, msg) for n, (ok, msg) in checks if not ok]
     for n, (ok, msg) in checks:

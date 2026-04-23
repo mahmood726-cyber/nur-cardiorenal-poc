@@ -2,6 +2,11 @@
 
 CLI subcommands:
     run-synth         — pipeline on synthetic fixtures (used by tests + CI)
+
+Posterior flow (post-review fix `c13d3cf+`):
+    fit_hte (PyMC) -> idata.posterior -> per-cell log_hr_draws via
+    log_hr = mu + X_cell . (beta + gamma).  Cube cells now reflect actual
+    posterior, not fabricated draws.
 """
 from __future__ import annotations
 import argparse
@@ -17,6 +22,22 @@ from nur_pce.schema import (
 )
 
 
+def _x_for_cell(t2dm: bool, sex: str) -> np.ndarray:
+    """Encode the synth pipeline's two-feature X-vector for a given cell.
+
+    The synth fixture uses two binary features: T2DM and male-sex. The fit's
+    X matrix uses the same encoding, so the cell's X must match.
+    """
+    return np.array([1.0 if t2dm else 0.0, 1.0 if sex == "M" else 0.0])
+
+
+def _flatten_chains(arr: np.ndarray) -> np.ndarray:
+    """Flatten posterior shape (chain, draw, ...) to (chain*draw, ...)."""
+    if arr.ndim <= 2:
+        return arr.reshape(-1)
+    return arr.reshape(-1, *arr.shape[2:])
+
+
 def run_synth_pipeline(*, out_dir: Path, fixtures_dir: Path) -> Path:
     out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     tier1 = load_tier1(fixtures_dir / "tier1_synth.json")
@@ -29,10 +50,8 @@ def run_synth_pipeline(*, out_dir: Path, fixtures_dir: Path) -> Path:
             trial_to_idx[r.trial_id] = len(trial_to_idx) + 1
         rows.append({
             "y": r.log_hr, "s": r.se, "trial": trial_to_idx[r.trial_id],
-            "X": [
-                1.0 if r.subgroup_key.t2dm else 0.0,
-                1.0 if r.subgroup_key.sex == "M" else 0.0,
-            ],
+            "X": _x_for_cell(r.subgroup_key.t2dm,
+                             r.subgroup_key.sex).tolist(),
         })
     inputs = HTEFitInputs(
         y=np.array([r["y"] for r in rows]),
@@ -41,10 +60,17 @@ def run_synth_pipeline(*, out_dir: Path, fixtures_dir: Path) -> Path:
         n_trials=len(trial_to_idx),
         X=np.array([r["X"] for r in rows]),
     )
-    fit = fit_hte(inputs, iter_warmup=1500, iter_sampling=1000, chains=4, seed=1,
-                  target_accept=0.95)
+    fit = fit_hte(inputs, iter_warmup=1500, iter_sampling=1000, chains=4,
+                  seed=1, target_accept=0.95)
     diag = fit.diagnostics()
     gate_diagnostics(diag)
+
+    posterior = fit.idata.posterior
+    mu_draws = _flatten_chains(posterior["mu"].values)            # (S,)
+    beta_draws = _flatten_chains(posterior["beta"].values)        # (S, P)
+    gamma_draws = _flatten_chains(posterior["gamma"].values)      # (S, P)
+    coef_draws = beta_draws + gamma_draws                          # (S, P)
+    var_sampling = float(np.mean(inputs.s ** 2))
 
     cells = []
     region = next(iter(populations))
@@ -59,10 +85,13 @@ def run_synth_pipeline(*, out_dir: Path, fixtures_dir: Path) -> Path:
                                 t2dm=t2dm, uacr_band=uacr, nyha=nyha,
                                 region=region,
                             )
-                            log_hr_draws = np.random.default_rng(0).normal(-0.30, 0.10, size=400)
+                            x_cell = _x_for_cell(t2dm, sex)
+                            log_hr_draws = mu_draws + coef_draws @ x_cell
+                            var_hte = float(np.var(coef_draws @ x_cell))
                             cells.append(build_cell(
                                 key=key, log_hr_draws=log_hr_draws, tier=1,
-                                var_sampling=0.01, var_hte=0.005, var_transport=0.001,
+                                var_sampling=var_sampling, var_hte=var_hte,
+                                var_transport=0.0,
                             ))
     write_cube(
         path=out_dir / "posterior_cube.json", cells=cells,
