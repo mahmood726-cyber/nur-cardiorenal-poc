@@ -16,16 +16,36 @@ def _toy_population() -> PopulationMarginals:
     )
 
 
-def test_projection_returns_per_draw_average():
+def test_projection_returns_natural_scale_weighted_log_hr():
+    """Projected log-HR = log( sum_c P_T(c) * exp(theta_c) )."""
     cells = {("a", "yes"): -0.30, ("a", "no"): -0.10,
              ("b", "yes"): -0.20, ("b", "no"): 0.05}
     cov_dims = ["x1", "x2"]
     proj = project_to_population(
         cell_log_hrs=cells, covariate_dims=cov_dims, population=_toy_population(),
     )
-    expected = (0.5 * 0.7 * -0.30 + 0.5 * 0.3 * -0.10
-                + 0.5 * 0.7 * -0.20 + 0.5 * 0.3 * 0.05)
-    assert proj == pytest.approx(expected, abs=1e-9)
+    expected_hr = (
+        0.5 * 0.7 * np.exp(-0.30) + 0.5 * 0.3 * np.exp(-0.10)
+        + 0.5 * 0.7 * np.exp(-0.20) + 0.5 * 0.3 * np.exp(0.05)
+    )
+    assert proj == pytest.approx(np.log(expected_hr), abs=1e-9)
+
+
+def test_natural_scale_differs_from_log_scale_for_finite_variance():
+    """Jensen's inequality: with cells differing by >0, natural-scale
+    average's log differs from the log-scale weighted average."""
+    cells = {("a", "yes"): -0.30, ("a", "no"): -0.10,
+             ("b", "yes"): -0.20, ("b", "no"): 0.05}
+    cov_dims = ["x1", "x2"]
+    proj_natural = project_to_population(
+        cell_log_hrs=cells, covariate_dims=cov_dims, population=_toy_population(),
+    )
+    log_scale_avg = (
+        0.5 * 0.7 * -0.30 + 0.5 * 0.3 * -0.10
+        + 0.5 * 0.7 * -0.20 + 0.5 * 0.3 * 0.05
+    )
+    # log( E[X] ) >= E[ log(X) ] by Jensen (equality only for degenerate).
+    assert proj_natural >= log_scale_avg
 
 
 def test_projection_handles_per_draw_arrays():
