@@ -56,7 +56,7 @@ class HTEFit:
 
 def fit_hte(inputs: HTEFitInputs, *, iter_warmup: int = 1000,
             iter_sampling: int = 1000, chains: int = 4,
-            seed: int = 42) -> HTEFit:
+            seed: int = 42, target_accept: float = 0.8) -> HTEFit:
     """Fit the hierarchical HTE model in PyMC.
 
     Implements spec §7:
@@ -85,6 +85,6 @@ def fit_hte(inputs: HTEFitInputs, *, iter_warmup: int = 1000,
         idata = pm.sample(
             draws=iter_sampling, tune=iter_warmup, chains=chains,
             random_seed=seed, progressbar=False, compute_convergence_checks=False,
-            return_inferencedata=True,
+            return_inferencedata=True, target_accept=target_accept,
         )
     return HTEFit(idata, inputs)
