@@ -1,26 +1,22 @@
-"""PyMC implementation of the hierarchical HTE model from spec §7.
+"""PyMC implementation of the hierarchical HTE model.
 
-v0.1.2 cleanup (2026-04-23, post-final-review): the original spec §7 had
-both `beta` (prognostic main effect) and `gamma` (treatment-by-covariate
-interaction) parameters. With Tier-1 data — one log-HR per (trial, subgroup-cell)
-— each row IS the treatment-vs-control contrast for that cell. There is no
-treatment-arm indicator at the row level, so `beta` and `gamma` are
-unidentifiable; only their sum drives the likelihood. The v0.1 model fit
-both and the posterior split the composite coefficient between them in
-proportion to their priors.
+History:
+- v0.1.0: spec §7 with both `beta` (prognostic main) and `gamma` (treatment x
+  covariate interaction). Tier-1 only.
+- v0.1.2: dropped `gamma` (unidentifiable given Tier-1-only data; only
+  beta+gamma sum drives the likelihood). Renamed `beta` as the
+  treatment-by-covariate interaction.
+- v0.2.0: **Tier-2 IPD likelihood added** (closes spec §3a item 1). Per-
+  individual reconstructed time-to-event records contribute via an
+  **exponential AFT block** sharing the same theta linear predictor.
+  Each Tier-2 individual i with arm a_i, time t_i, event d_i contributes:
+      eta_i = b0 + alpha_trial[i] + a_i * (mu + X_i . beta)
+      log L_i = d_i * eta_i - exp(eta_i) * t_i
+  where b0 is a Tier-2-only baseline log-hazard. Note: exponential
+  (constant-hazard) is a simplification of the Cox-via-Poisson form spec §7
+  named; full discrete-time Cox-via-Poisson is v0.3 work.
 
-Fix in v0.1.2: drop `gamma` from the model. The remaining `beta` is now
-explicitly the treatment-by-covariate interaction (the moderation of the
-log-HR by X). Posterior over the *effective* coefficient (sum of old
-beta+gamma) is identical; the parameterisation is just honest about what
-Tier-1 data identifies.
-
-When Tier-2 IPD is wired in (future v0.2 work), the model can re-introduce
-a separate `gamma` because per-individual rows DO carry treatment-arm
-indicators, restoring identifiability.
-
-Engine choice: PyMC 5 (per plan amendment after preflight). Diagnostics
-returned via ArviZ summary.
+Engine: PyMC 5. Diagnostics returned via ArviZ summary.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -31,11 +27,21 @@ import arviz as az
 
 @dataclass(frozen=True)
 class HTEFitInputs:
-    y: np.ndarray            # (N,) log-HR per row
-    s: np.ndarray            # (N,) SE per row
-    trial: np.ndarray        # (N,) 1..J trial index
+    y: np.ndarray            # (N1,) log-HR per Tier-1 row
+    s: np.ndarray            # (N1,) SE per Tier-1 row
+    trial: np.ndarray        # (N1,) 1..J trial index per Tier-1 row
     n_trials: int
-    X: np.ndarray            # (N, P) covariates
+    X: np.ndarray            # (N1, P) Tier-1 covariates
+    # Tier-2 IPD (v0.2; all-or-nothing — pass all five or pass none):
+    tier2_time: np.ndarray | None = None     # (N2,) time-to-event >= 0
+    tier2_event: np.ndarray | None = None    # (N2,) 0/1 event indicator
+    tier2_arm: np.ndarray | None = None      # (N2,) 0=control, 1=treatment
+    tier2_X: np.ndarray | None = None        # (N2, P) Tier-2 covariates
+    tier2_trial: np.ndarray | None = None    # (N2,) 1..J trial index per Tier-2 row
+
+    @property
+    def has_tier2(self) -> bool:
+        return self.tier2_time is not None
 
 
 class HTEFit:
@@ -96,8 +102,31 @@ def fit_hte(inputs: HTEFitInputs, *, iter_warmup: int = 1000,
         alpha_raw = pm.Normal("alpha_raw", 0.0, 1.0, shape=J)
         alpha = pm.Deterministic("alpha", tau * alpha_raw)
 
+        # Tier-1 likelihood (subgroup log-HRs)
         theta = mu + alpha[trial_idx0] + pm.math.dot(inputs.X, beta)
         pm.Normal("y_obs", mu=theta, sigma=inputs.s, observed=inputs.y)
+
+        # Tier-2 likelihood (per-individual exponential AFT, v0.2).
+        #
+        # Design choice: alpha (trial RE) is *Tier-1-specific* — it captures
+        # trial-level variation in published subgroup HRs (publication-window
+        # effects, slightly different cohort framings, etc.). Tier-2
+        # individual-level records see the *underlying* treatment effect
+        # directly, with no trial-specific shift. So alpha does not appear
+        # in Tier-2's eta. mu and beta are shared.
+        #
+        # b0 is a global Tier-2 baseline log-hazard. Trial-level baseline
+        # variation in Tier-2 is not modelled (could be added as a separate
+        # b0_trial random effect in a future iteration).
+        if inputs.has_tier2:
+            b0 = pm.Normal("b0", 0.0, 1.0)
+            treatment_effect = mu + pm.math.dot(inputs.tier2_X, beta)
+            eta_t2 = b0 + inputs.tier2_arm * treatment_effect
+            log_lik = (
+                inputs.tier2_event * eta_t2
+                - pm.math.exp(eta_t2) * inputs.tier2_time
+            )
+            pm.Potential("tier2_likelihood", pm.math.sum(log_lik))
 
         idata = pm.sample(
             draws=iter_sampling, tune=iter_warmup, chains=chains,
@@ -105,3 +134,22 @@ def fit_hte(inputs: HTEFitInputs, *, iter_warmup: int = 1000,
             return_inferencedata=True, target_accept=target_accept,
         )
     return HTEFit(idata, inputs)
+
+
+def tier2_records_to_arrays(records, trial_to_idx: dict[str, int],
+                            x_encoder) -> dict[str, np.ndarray]:
+    """Convert list[Tier2Record] to the array form HTEFitInputs expects.
+
+    Args:
+        records: list of Tier2Record
+        trial_to_idx: maps trial_id -> 1..J integer
+        x_encoder: callable Tier2Record -> 1-D numpy array of length P
+    """
+    n = len(records)
+    arm = np.array([1 if r.arm == "treatment" else 0 for r in records], dtype=int)
+    time = np.array([r.time for r in records], dtype=float)
+    event = np.array([r.event for r in records], dtype=int)
+    trial = np.array([trial_to_idx[r.trial_id] for r in records], dtype=int)
+    X = np.stack([x_encoder(r) for r in records]) if n else np.zeros((0, 0))
+    return {"tier2_time": time, "tier2_event": event, "tier2_arm": arm,
+            "tier2_X": X, "tier2_trial": trial}
