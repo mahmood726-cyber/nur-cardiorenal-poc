@@ -44,11 +44,46 @@ class HTEFitInputs:
         return self.tier2_time is not None
 
 
+def _summary_dataframe(idata: az.InferenceData):
+    """Call az.summary with a 90% interval, robust across ArviZ major versions.
+
+    ArviZ 0.x exposes ``hdi_prob`` (default 0.94 -> columns ``hdi_3%``/``hdi_97%``);
+    ArviZ 1.x renamed the knob to ``ci_prob`` and emits ``etiNN_lb``/``etiNN_ub``
+    (or ``hdiNN_*``) columns. We request a 90% interval so the resulting bounds
+    line up with the ``q05``/``q95`` field names downstream.
+    """
+    try:
+        return az.summary(idata, round_to="none", ci_prob=0.90)
+    except TypeError:
+        return az.summary(idata, round_to="none", hdi_prob=0.90)
+
+
+def _interval_columns(columns) -> tuple[str, str]:
+    """Locate the (lower, upper) interval-bound column names in an az.summary frame.
+
+    Handles both ArviZ 0.x (``hdi_5%``/``hdi_95%``) and ArviZ 1.x
+    (``eti90_lb``/``eti90_ub`` or ``hdi90_lb``/``hdi90_ub``).
+    """
+    cols = list(columns)
+    lower = next((c for c in cols if c.endswith("_lb")), None)
+    upper = next((c for c in cols if c.endswith("_ub")), None)
+    if lower is not None and upper is not None:
+        return lower, upper
+    pct = sorted(
+        (c for c in cols if (c.startswith("hdi_") or c.startswith("eti_")) and c.endswith("%")),
+        key=lambda c: float(c.split("_")[-1].rstrip("%")),
+    )
+    if len(pct) >= 2:
+        return pct[0], pct[-1]
+    raise KeyError(f"could not locate interval-bound columns in {cols}")
+
+
 class HTEFit:
     def __init__(self, idata: az.InferenceData, inputs: HTEFitInputs):
         self.idata = idata
         self.inputs = inputs
-        self._summary = az.summary(idata, round_to="none")
+        self._summary = _summary_dataframe(idata)
+        self._lb_col, self._ub_col = _interval_columns(self._summary.columns)
 
     def posterior_summary(self, name: str) -> dict[str, float]:
         if name not in self._summary.index:
@@ -57,8 +92,8 @@ class HTEFit:
         return {
             "mean": float(row["mean"]),
             "sd": float(row["sd"]),
-            "q05": float(row["hdi_3%"]),
-            "q95": float(row["hdi_97%"]),
+            "q05": float(row[self._lb_col]),
+            "q95": float(row[self._ub_col]),
             "rhat": float(row["r_hat"]),
             "ess_bulk": float(row["ess_bulk"]),
         }
